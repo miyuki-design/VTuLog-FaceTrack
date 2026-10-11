@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useLive2D, LIVE2D_CANVAS_SIZE, type Live2DDiagnostics, type NormalizedFileInfo } from './useLive2D'
+import { startFaceDetection } from './faceTracking'
 
 type AppState = 'idle' | 'recording' | 'preview' | 'playing'
 
@@ -277,6 +278,33 @@ export default function App() {
   const useLive2DRef = useRef(false)
   const live2dFolderInputRef = useRef<HTMLInputElement>(null)
 
+  // Stage 1: detect expressions with the front camera without modifying Live2D.
+  // Switching camera types reloads the app so iOS releases its previous stream.
+  const [faceMode] = useState(() => localStorage.getItem('vtulog-face-mode') === '1')
+  const [faceStatus, setFaceStatus] = useState('OFF')
+  const [faceValues, setFaceValues] = useState<{ blink: number; mouth: number; smile: number } | null>(null)
+  const switchFaceMode = () => {
+    localStorage.setItem('vtulog-face-mode', faceMode ? '0' : '1')
+    window.location.reload()
+  }
+  useEffect(() => {
+    if (!faceMode || !cameraReady) return
+    const video = hiddenVideoRef.current
+    if (!video) return
+    let inactive = false
+    let stop: (() => void) | undefined
+    setFaceStatus('顔認識を準備中…')
+    startFaceDetection(video,
+      values => {
+        if (inactive) return
+        setFaceValues(values)
+        setFaceStatus(values ? '顔を認識中 ✓' : '顔を探しています…')
+      },
+    ).then(dispose => { if (inactive) dispose(); else stop = dispose })
+     .catch(error => { if (!inactive) setFaceStatus('開始失敗: ' + String(error)) })
+    return () => { inactive = true; stop?.() }
+  }, [faceMode, cameraReady])
+
   // ── UI ──
   const [showSaved, setShowSaved] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -296,7 +324,7 @@ export default function App() {
     ;(async () => {
       try {
         const s = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 3840 }, height: { ideal: 2160 } ,frameRate: { ideal: 30, max: 30 },},
+          video: { facingMode: { ideal: faceMode ? 'user' : 'environment' }, width: { ideal: faceMode ? 1280 : 3840 }, height: { ideal: faceMode ? 720 : 2160 }, frameRate: { ideal: 30, max: 30 } },
           audio: false,
         })
         localStream = s
@@ -728,7 +756,7 @@ try {
 
       const s = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: { ideal: faceMode ? 'user' : 'environment' },
           width: { ideal: 3840 },
           height: { ideal: 2160 },
           frameRate: { ideal: 30, max: 30 },
@@ -1049,6 +1077,23 @@ try {
                 </button>
               )}
 
+              {/* Front-camera face tracking: stage 1 diagnostics */}
+              <div className="rounded-xl p-2.5 mb-3" style={{ border: '1px solid rgba(0,229,255,0.35)' }}>
+                <button type="button" className="w-full rounded-xl py-2 text-xs"
+                  style={{ background: 'rgba(0,229,255,0.12)', color: 'var(--color-cyan)' }}
+                  onClick={switchFaceMode}>
+                  {faceMode ? '🎭 顔認識 ON（タップでOFF）' : '🎭 顔認識を試す（前面カメラ）'}
+                </button>
+                {faceMode && (
+                  <div style={{ fontSize: 10, color: 'var(--color-cyan)', marginTop: 8 }}>
+                    <p>{faceStatus}</p>
+                    {faceValues && <p>まばたき {Math.round(faceValues.blink * 100)}% ／ 口 {Math.round(faceValues.mouth * 100)}% ／ 笑顔 {Math.round(faceValues.smile * 100)}%</p>}
+                  </div>
+                )}
+                <p style={{ fontSize: 9, color: 'var(--color-muted)', marginTop: 5 }}>
+                  第1段階：顔認識だけ検証します。Live2Dの表情反映は次の段階です。
+                </p>
+              </div>
               {/* Folder select button */}
               <button
                 className="w-full flex items-center justify-center gap-2 rounded-xl py-2.5 transition-all active:scale-95"
