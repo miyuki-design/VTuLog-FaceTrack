@@ -1,3 +1,5 @@
+import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
+
 /** Stage 1 — local face detection only. No changes to Live2D or its 4096 canvas. */
 export interface FaceReadout { blink: number; mouth: number; smile: number }
 type FaceCategory = { categoryName: string; score: number }
@@ -6,17 +8,10 @@ type FaceLandmarkerInstance = {
   detectForVideo: (video: HTMLVideoElement, timestampMs: number) => FaceResult
   close: () => void
 }
-type VisionModule = {
-  FilesetResolver: { forVisionTasks: (url: string) => Promise<unknown> }
-  FaceLandmarker: {
-    createFromOptions: (vision: unknown, options: object) => Promise<FaceLandmarkerInstance>
-  }
-}
 
 const VERSION = '0.10.22'
 const WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VERSION}/wasm`
 const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'
-const MODULE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VERSION}/+esm`
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
 
 export async function startFaceDetection(
@@ -24,7 +19,6 @@ export async function startFaceDetection(
   report: (values: FaceReadout | null) => void,
 ): Promise<() => void> {
   // Vite leaves this dynamic CDN URL untouched. No lockfile / package change needed.
-  const visionModule = await import(/* @vite-ignore */ MODULE) as VisionModule
   const resolver = await visionModule.FilesetResolver.forVisionTasks(WASM)
   const landmarker = await visionModule.FaceLandmarker.createFromOptions(resolver, {
     baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' },
