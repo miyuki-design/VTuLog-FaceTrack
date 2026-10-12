@@ -366,7 +366,8 @@ export function useLive2D() {
           'ParamEyeLOpen','ParamEyeROpen','ParamMouthOpenY','ParamMouthForm',
           'ParamAngleX','ParamAngleY','ParamAngleZ',
           'ParamBodyAngleX','ParamBodyAngleY','ParamBodyAngleZ',
-          'ParamEyeBallX','ParamEyeBallY',
+          'ParamEyeBallX','ParamEyeBallY', 'ParamEyesSmile',
+          'ParamBrowLForm','ParamBrowRForm','ParamEyeBallForm',
         ]
         console.info('[FaceTrack] matched:', tracked.filter(id => byId.has(id)))
         const current = new Map<string, number>()
@@ -387,7 +388,25 @@ export function useLive2D() {
           drive('ParamEyeLOpen', Math.max(0, 1 - (input.leftBlink ?? input.blink) * 1.5 + (input.leftWide ?? 0) * .85), .55)
           drive('ParamEyeROpen', Math.max(0, 1 - (input.rightBlink ?? input.blink) * 1.5 + (input.rightWide ?? 0) * .85), .55)
           drive('ParamMouthOpenY', Math.min(1, input.mouth * 1.4), .48)
-          drive('ParamMouthForm', Math.max(-1, Math.min(1, input.smile * 2 - 1)), .32)
+          // Mouth shape: smile versus pursed/funneled lips; no emotion classification.
+          const smile = input.smile
+          const pursed = Math.max(input.mouthPucker ?? 0, (input.mouthFunnel ?? 0) * .8)
+          const stretched = input.mouthWide ?? 0
+          drive('ParamMouthForm', Math.max(-1, Math.min(1, smile * 1.7 + stretched * .35 - pursed * 1.7 - .25)), .36)
+          // Eye-smile is a dedicated modeled parameter. Keep blinks independent.
+          const eyeSmile = Math.max(input.leftSmileEye ?? 0, input.rightSmileEye ?? 0)
+          const smileEyesTarget = Math.max(0, Math.min(1, eyeSmile * .8 + Math.max(0, smile - .4) * .55))
+          const eyeSmileParam = byId.get('ParamEyesSmile')
+          if (eyeSmileParam) drive('ParamEyesSmile', smileEyesTarget * Math.max(1, eyeSmileParam.max), .32)
+          // Brow form ranges differ by model, so map normalized facial movement into each actual range.
+          const setBrow = (id: string, amount: number) => {
+            const p = byId.get(id)
+            if (!p) return
+            const target = amount >= 0 ? amount * Math.max(0, p.max) : amount * Math.max(0, -p.min)
+            drive(id, target, .30)
+          }
+          setBrow('ParamBrowLForm', (input.browLeft ?? 0) - (input.browFrown ?? 0) * .25)
+          setBrow('ParamBrowRForm', (input.browRight ?? 0) - (input.browFrown ?? 0) * .25)
           drive('ParamAngleX', (input.headX ?? 0) * 30)
           drive('ParamAngleY', (input.headY ?? 0) * 25)
           drive('ParamAngleZ', (input.headZ ?? 0) * 25)

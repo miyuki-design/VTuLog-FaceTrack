@@ -8,6 +8,10 @@ export interface FaceReadout {
   leftWide?: number; rightWide?: number
   headX?: number; headY?: number; headZ?: number
   eyeX?: number; eyeY?: number
+  leftSmileEye?: number; rightSmileEye?: number
+  browLeft?: number; browRight?: number
+  browFrown?: number
+  mouthPucker?: number; mouthFunnel?: number; mouthWide?: number
   body?: BodyReadout | null
 }
 const VERSION = '1.1.0'
@@ -116,6 +120,12 @@ export async function startFaceDetection(
             mouth: score('jawOpen'), smile: (score('mouthSmileLeft') + score('mouthSmileRight')) / 2,
             leftBlink: lb, rightBlink: rb,
             leftWide: score('eyeWideLeft'), rightWide: score('eyeWideRight'),
+            leftSmileEye: score('eyeSquintLeft'), rightSmileEye: score('eyeSquintRight'),
+            browLeft: clamp(score('browOuterUpLeft') * .65 + score('browInnerUp') * .6 - score('browDownLeft'), -1, 1),
+            browRight: clamp(score('browOuterUpRight') * .65 + score('browInnerUp') * .6 - score('browDownRight'), -1, 1),
+            browFrown: clamp((score('browDownLeft') + score('browDownRight')) / 2, 0, 1),
+            mouthPucker: score('mouthPucker'), mouthFunnel: score('mouthFunnel'),
+            mouthWide: clamp((score('mouthStretchLeft') + score('mouthStretchRight')) / 2, 0, 1),
             headX: lastHead.x, headY: lastHead.y, headZ: lastHead.z,
             eyeX: clamp((score('eyeLookOutRight') + score('eyeLookInLeft') - score('eyeLookInRight') - score('eyeLookOutLeft')), -1, 1),
             eyeY: clamp((score('eyeLookUpLeft') + score('eyeLookUpRight') - score('eyeLookDownLeft') - score('eyeLookDownRight')), -1, 1),
