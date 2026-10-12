@@ -350,13 +350,16 @@ export function useLive2D() {
       const coreModel = internalModel?.coreModel as any
       if (internalModel?.on && coreModel) {
         // Some moc3 models omit certain parameters. Only write existing IDs.
-        const trackedIds: Record<string, 'blink' | 'mouth' | 'smile'> = {
+        const trackedIds: Record<string, 'blink' | 'mouth' | 'smile' | 'tilt' | 'sway' | 'shrug'> = {
           ParamEyeLOpen: 'blink',
           ParamEyeROpen: 'blink',
           ParamMouthOpenY: 'mouth',
           ParamMouthForm: 'smile',
+          ParamBodyAngleZ: 'tilt',
+          ParamBodyAngleX: 'sway',
+          ParamBodyAngleY: 'shrug',
         }
-        const indexedParams: Array<{ index: number; key: 'blink' | 'mouth' | 'smile'; id: string }> = []
+        const indexedParams: Array<{ index: number; key: keyof typeof trackedIds; id: string }> = []
         // Cubism Framework exposes getParameterCount/setParameterValueByIndex,
         // but its parameter IDs live in the underlying Cubism Core model.
         // It does NOT expose getParameterId() on every version.
@@ -373,16 +376,32 @@ export function useLive2D() {
           if (key) indexedParams.push({ index, key, id })
         }
         console.info('[FaceTrack] matched Live2D parameters:', indexedParams.map(p => p.id))
+        // Keep the original model layout; sway additionally works when body parameters are absent.
+        let originalX = model.position.x
+        let originalRotation = model.rotation
+        let displaySway = 0
+        let displayTilt = 0
         internalModel.on('beforeModelUpdate', () => {
           const face = faceReadoutRef.current
           if (!face) return
+          // Smooth the whole avatar a little, without touching the 4096 canvas.
+          const targetSway = face.body?.sway ?? 0
+          const targetTilt = face.body?.tilt ?? 0
+          displaySway += (targetSway - displaySway) * .12
+          displayTilt += (targetTilt - displayTilt) * .12
+          model.position.x = originalX + displaySway * 36
+          model.rotation = originalRotation + displayTilt * .025
           // FaceReadout.blink: 0 = open, 1 = closed. Cubism reverses this range.
           for (const param of indexedParams) {
             const value = param.key === 'blink'
               ? Math.max(0, Math.min(1, 1 - face.blink * 1.5))
               : param.key === 'mouth'
                 ? Math.max(0, Math.min(1, face.mouth * 1.4))
-                : Math.max(-1, Math.min(1, face.smile * 2 - 1))
+                : param.key === 'smile'
+                  ? Math.max(-1, Math.min(1, face.smile * 2 - 1))
+                  : param.key === 'tilt' ? (face.body?.tilt ?? 0) * 15
+                  : param.key === 'sway' ? (face.body?.sway ?? 0) * 12
+                  : (face.body?.shrug ?? 0) * 8
             if (typeof coreModel.setParameterValueByIndex === 'function') {
               coreModel.setParameterValueByIndex(param.index, value)
             } else if (rawParams?.values) {
@@ -405,6 +424,8 @@ export function useLive2D() {
         (LIVE2D_CANVAS_SIZE - mw * sc) / 2,
         (LIVE2D_CANVAS_SIZE - mh * sc) / 2,
       )
+      originalX = model.position.x
+      originalRotation = model.rotation
 
       loadedRef.current = true
       setStatus('loaded')
