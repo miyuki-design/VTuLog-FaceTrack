@@ -391,8 +391,8 @@ export function useLive2D() {
           const targetTilt = face.body?.tilt ?? 0
           displaySway += (targetSway - displaySway) * .12
           displayTilt += (targetTilt - displayTilt) * .12
-          model.position.x = originalX + displaySway * 36
-          model.rotation = originalRotation + displayTilt * .025
+          model.position.x = originalX + displaySway * 400
+          model.rotation = originalRotation + displayTilt * 0.12
           // FaceReadout.blink: 0 = open, 1 = closed. Cubism reverses this range.
           for (const param of indexedParams) {
             const value = param.key === 'blink'
