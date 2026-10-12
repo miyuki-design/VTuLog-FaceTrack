@@ -342,6 +342,8 @@ export function useLive2D() {
       fileArray.settings = settings
       const model = await (Live2DModel as any).from(fileArray, { autoInteract: false })
       app.stage.addChild(model)
+      let originalX = 0
+      let originalRotation = 0
 
       // Stage 2: apply the tracked expression just before Cubism renders.
       // Keep this passive until MediaPipe detects a face.
@@ -377,8 +379,8 @@ export function useLive2D() {
         }
         console.info('[FaceTrack] matched Live2D parameters:', indexedParams.map(p => p.id))
         // Keep the original model layout; sway additionally works when body parameters are absent.
-        let originalX = model.position.x
-        let originalRotation = model.rotation
+        originalX = model.position.x
+        originalRotation = model.rotation
         let displaySway = 0
         let displayTilt = 0
         internalModel.on('beforeModelUpdate', () => {
