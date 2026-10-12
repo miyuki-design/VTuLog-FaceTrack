@@ -213,7 +213,10 @@ const CH = 1920
 
 export default function App() {
   // ── Camera ──
-  const hiddenVideoRef = useRef<HTMLVideoElement>(null)
+  const hiddenVideoRef = useRef<HTMLVideoElement>(null) // rear: recorded scenery
+  const faceVideoRef = useRef<HTMLVideoElement>(null) // front: tracking only
+  const faceStreamRef = useRef<MediaStream | null>(null)
+  const [faceCameraReady, setFaceCameraReady] = useState(false)
   const cameraStreamRef = useRef<MediaStream | null>(null)
   const [cameraReady, setCameraReady] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
@@ -280,8 +283,8 @@ export default function App() {
   const live2dUpdateRef = useRef(live2d.updateFace)
   useEffect(() => { live2dUpdateRef.current = live2d.updateFace }, [live2d.updateFace])
 
-  // Stage 1: detect expressions with the front camera without modifying Live2D.
-  // Switching camera types reloads the app so iOS releases its previous stream.
+  // Dual camera: rear for recording, front for MediaPipe when available.
+  // Some iOS devices/browsers cannot provide both streams simultaneously.
   const [faceMode] = useState(() => localStorage.getItem('vtulog-face-mode') === '1')
   const [faceStatus, setFaceStatus] = useState('OFF')
   const [faceValues, setFaceValues] = useState<{ blink: number; mouth: number; smile: number } | null>(null)
@@ -290,8 +293,8 @@ export default function App() {
     window.location.reload()
   }
   useEffect(() => {
-    if (!faceMode || !cameraReady) return
-    const video = hiddenVideoRef.current
+    if (!faceMode || !faceCameraReady) return
+    const video = faceVideoRef.current
     if (!video) return
     let inactive = false
     let stop: (() => void) | undefined
@@ -306,7 +309,7 @@ export default function App() {
     ).then(dispose => { if (inactive) dispose(); else stop = dispose })
      .catch(error => { if (!inactive) setFaceStatus('開始失敗: ' + String(error)) })
     return () => { inactive = true; stop?.(); live2dUpdateRef.current(null) }
-  }, [faceMode, cameraReady])
+  }, [faceMode, faceCameraReady])
 
   // ── UI ──
   const [showSaved, setShowSaved] = useState(false)
@@ -321,26 +324,74 @@ export default function App() {
   const displayAvatarName = isLive2DActive ? live2d.modelName : useCustom ? avatarName : presetAvatar.name
   const displayAvatarColor = isLive2DActive ? '#00E5FF' : useCustom ? '#FF3FA4' : presetAvatar.color
 
-  // ── Camera init ──
+  // ── Rear scene camera + optional simultaneous front tracking camera ──
   useEffect(() => {
-    let localStream: MediaStream | null = null
-    ;(async () => {
+    let cancelled = false
+    let rear: MediaStream | null = null
+    let front: MediaStream | null = null
+    const start = async () => {
       try {
-        const s = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: faceMode ? 'user' : 'environment' }, width: { ideal: faceMode ? 1280 : 3840 }, height: { ideal: faceMode ? 720 : 2160 }, frameRate: { ideal: 30, max: 30 } },
+        // Use exact facingMode so an unavailable rear camera does not silently select the front one.
+        rear = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } },
           audio: false,
         })
-        localStream = s
-        cameraStreamRef.current = s
-        const v = hiddenVideoRef.current!
-        v.srcObject = s
-        v.onloadedmetadata = () => { v.play(); setCameraReady(true) }
-      } catch (e) {
-        setCameraError((e as Error).name === 'NotAllowedError' ? 'カメラへのアクセスが拒否されました' : 'カメラを起動できませんでした')
+        if (cancelled) { rear.getTracks().forEach(t => t.stop()); return }
+        cameraStreamRef.current = rear
+        const sceneVideo = hiddenVideoRef.current
+        if (sceneVideo) {
+          sceneVideo.srcObject = rear
+          try { await sceneVideo.play() } catch { /* metadata callback retries playback */ }
+        }
+        setCameraReady(true)
+        if (!faceMode) return
+        setFaceStatus('前面カメラを起動中…')
+        try {
+          front = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { exact: 'user' }, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15, max: 24 } },
+            audio: false,
+          })
+          if (cancelled) { front.getTracks().forEach(t => t.stop()); return }
+          // iOS may stop the first camera when the second opens. Keep scenery first.
+          const rearTrack = rear?.getVideoTracks()[0]
+          if (!rearTrack || rearTrack.readyState !== 'live' || rearTrack.muted) {
+            front.getTracks().forEach(t => t.stop())
+            front = null
+            setFaceStatus('この端末では前面・背面の同時起動ができません。背面映像を優先します。')
+            if (rearTrack?.readyState !== 'live') {
+              rear = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false,
+              })
+              if (cancelled) { rear.getTracks().forEach(t => t.stop()); return }
+              cameraStreamRef.current = rear
+              if (sceneVideo) { sceneVideo.srcObject = rear; await sceneVideo.play().catch(() => {}) }
+            }
+            return
+          }
+          faceStreamRef.current = front
+          const trackingVideo = faceVideoRef.current
+          if (trackingVideo) {
+            trackingVideo.srcObject = front
+            await trackingVideo.play()
+            if (!cancelled) setFaceCameraReady(true)
+          }
+        } catch (error) {
+          console.warn('[FaceTrack] Could not start second camera:', error)
+          if (!cancelled) setFaceStatus('前面カメラを同時に起動できません。背面映像は使用できます。')
+        }
+      } catch (error) {
+        if (!cancelled) setCameraError((error as Error).name === 'NotAllowedError' ? 'カメラへのアクセスが拒否されました' : '背面カメラを起動できませんでした')
       }
-    })()
-    return () => localStream?.getTracks().forEach(t => t.stop())
-  }, [])
+    }
+    void start()
+    return () => {
+      cancelled = true
+      rear?.getTracks().forEach(t => t.stop())
+      front?.getTracks().forEach(t => t.stop())
+      faceStreamRef.current = null
+      cameraStreamRef.current = null
+    }
+  }, [faceMode])
 
   // ── Load avatar image ──
   useEffect(() => {
@@ -759,7 +810,7 @@ try {
 
       const s = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: { ideal: faceMode ? 'user' : 'environment' },
+          facingMode: { exact: 'environment' },
           width: { ideal: 3840 },
           height: { ideal: 2160 },
           frameRate: { ideal: 30, max: 30 },
@@ -807,6 +858,7 @@ try {
     <div className="h-full flex items-center justify-center" style={{ background: 'var(--color-bg)', fontFamily: 'var(--font-body)' }}>
       {/* hidden camera video source */}
       <video ref={hiddenVideoRef} autoPlay playsInline muted style={{ display: 'none' }} />
+      <video ref={faceVideoRef} autoPlay playsInline muted style={{ display: 'none' }} />
 
       {/* hidden file inputs */}
       <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
@@ -1085,7 +1137,7 @@ try {
                 <button type="button" className="w-full rounded-xl py-2 text-xs"
                   style={{ background: 'rgba(0,229,255,0.12)', color: 'var(--color-cyan)' }}
                   onClick={switchFaceMode}>
-                  {faceMode ? '🎭 顔認識 ON（タップでOFF）' : '🎭 顔認識を試す（前面カメラ）'}
+                  {faceMode ? '🎭 顔認識 ON（タップでOFF）' : '🎭 背面撮影＋前面顔認識 ON'}
                 </button>
                 {faceMode && (
                   <div style={{ fontSize: 10, color: 'var(--color-cyan)', marginTop: 8 }}>
@@ -1094,7 +1146,7 @@ try {
                   </div>
                 )}
                 <p style={{ fontSize: 9, color: 'var(--color-muted)', marginTop: 5 }}>
-                  第1段階：顔認識だけ検証します。Live2Dの表情反映は次の段階です。
+                  背面カメラを録画に使用。顔認識ON時は前面カメラを同時起動します（iPhoneの機種・Safariによっては同時起動できません）。
                 </p>
               </div>
               {/* Folder select button */}
