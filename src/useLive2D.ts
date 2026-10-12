@@ -389,10 +389,12 @@ export function useLive2D() {
           // Smooth the whole avatar a little, without touching the 4096 canvas.
           const targetSway = face.body?.sway ?? 0
           const targetTilt = face.body?.tilt ?? 0
-          displaySway += (targetSway - displaySway) * .12
-          displayTilt += (targetTilt - displayTilt) * .12
-          model.position.x = originalX + displaySway * 400
-          model.rotation = originalRotation + displayTilt * 0.12
+          displaySway += (targetSway - displaySway) * 0.08
+          displayTilt += (targetTilt - displayTilt) * 0.08
+
+          model.position.x = originalX + displaySway * 100
+          model.rotation = originalRotation + displayTilt * 0.045
+          
           // FaceReadout.blink: 0 = open, 1 = closed. Cubism reverses this range.
           for (const param of indexedParams) {
             const value = param.key === 'blink'
