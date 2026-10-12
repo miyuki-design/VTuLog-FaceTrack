@@ -19,8 +19,8 @@ export async function startFaceDetection(
   report: (values: FaceReadout | null) => void,
 ): Promise<() => void> {
   // Vite leaves this dynamic CDN URL untouched. No lockfile / package change needed.
-  const resolver = await visionModule.FilesetResolver.forVisionTasks(WASM)
-  const landmarker = await visionModule.FaceLandmarker.createFromOptions(resolver, {
+  const resolver = await FilesetResolver.forVisionTasks(WASM)
+  const landmarker = await FaceLandmarker.createFromOptions(resolver, {
     baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' },
     runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: true,
   })
