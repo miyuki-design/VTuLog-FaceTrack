@@ -9,7 +9,7 @@ type FaceLandmarkerInstance = {
   close: () => void
 }
 
-const VERSION = '0.10.22'
+const VERSION = '1.1.0'
 const WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VERSION}/wasm`
 const MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n))
