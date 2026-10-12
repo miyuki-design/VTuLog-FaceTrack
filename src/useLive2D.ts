@@ -342,76 +342,61 @@ export function useLive2D() {
       fileArray.settings = settings
       const model = await (Live2DModel as any).from(fileArray, { autoInteract: false })
       app.stage.addChild(model)
-      let originalX = 0
-      let originalRotation = 0
-
-      // Stage 2: apply the tracked expression just before Cubism renders.
-      // Keep this passive until MediaPipe detects a face.
-      // The listener belongs to this model and is destroyed with it.
+      // Stage 4: drive actual Cubism model parameters, not the whole Pixi sprite.
+      // The model's physics3.json uses the principal Angle/BodyAngle parameters as inputs.
       const internalModel = model.internalModel as any
       const coreModel = internalModel?.coreModel as any
       if (internalModel?.on && coreModel) {
-        // Some moc3 models omit certain parameters. Only write existing IDs.
-        const trackedIds: Record<string, 'blink' | 'mouth' | 'smile' | 'tilt' | 'sway' | 'shrug'> = {
-          ParamEyeLOpen: 'blink',
-          ParamEyeROpen: 'blink',
-          ParamMouthOpenY: 'mouth',
-          ParamMouthForm: 'smile',
-          ParamBodyAngleZ: 'tilt',
-          ParamBodyAngleX: 'sway',
-          ParamBodyAngleY: 'shrug',
-        }
-        const indexedParams: Array<{ index: number; key: keyof typeof trackedIds; id: string }> = []
-        // Cubism Framework exposes getParameterCount/setParameterValueByIndex,
-        // but its parameter IDs live in the underlying Cubism Core model.
-        // It does NOT expose getParameterId() on every version.
         const rawParams = coreModel._model?.parameters
+        const byId = new Map<string, { index: number; min: number; max: number }>()
         const count = typeof coreModel.getParameterCount === 'function'
-          ? coreModel.getParameterCount()
-          : (rawParams?.count ?? 0)
+          ? coreModel.getParameterCount() : (rawParams?.count ?? 0)
         for (let index = 0; index < count; index++) {
           const rawId = rawParams?.ids?.[index] ??
             (typeof coreModel.getParameterId === 'function' ? coreModel.getParameterId(index) : null)
           if (rawId == null) continue
           const id = typeof rawId?.getString === 'function' ? rawId.getString() : String(rawId)
-          const key = trackedIds[id]
-          if (key) indexedParams.push({ index, key, id })
+          byId.set(id, {
+            index,
+            min: rawParams?.minimumValues?.[index] ?? -30,
+            max: rawParams?.maximumValues?.[index] ?? 30,
+          })
         }
-        console.info('[FaceTrack] matched Live2D parameters:', indexedParams.map(p => p.id))
-        // Keep the original model layout; sway additionally works when body parameters are absent.
-        originalX = model.position.x
-        originalRotation = model.rotation
-        let displaySway = 0
-        let displayTilt = 0
+        const tracked = [
+          'ParamEyeLOpen','ParamEyeROpen','ParamMouthOpenY','ParamMouthForm',
+          'ParamAngleX','ParamAngleY','ParamAngleZ',
+          'ParamBodyAngleX','ParamBodyAngleY','ParamBodyAngleZ',
+          'ParamEyeBallX','ParamEyeBallY',
+        ]
+        console.info('[FaceTrack] matched:', tracked.filter(id => byId.has(id)))
+        const current = new Map<string, number>()
+        const drive = (id: string, target: number, alpha = .28) => {
+          const p = byId.get(id)
+          if (!p) return
+          const prev = current.get(id) ?? (rawParams?.values?.[p.index] ?? target)
+          const value = Math.max(p.min, Math.min(p.max, prev + (target - prev) * alpha))
+          current.set(id, value)
+          if (typeof coreModel.setParameterValueByIndex === 'function') {
+            coreModel.setParameterValueByIndex(p.index, value)
+          } else if (rawParams?.values) rawParams.values[p.index] = value
+        }
         internalModel.on('beforeModelUpdate', () => {
-          const face = faceReadoutRef.current
-          if (!face) return
-          // Smooth the whole avatar a little, without touching the 4096 canvas.
-          const targetSway = face.body?.sway ?? 0
-          const targetTilt = face.body?.tilt ?? 0
-          displaySway += (targetSway - displaySway) * 0.08
-          displayTilt += (targetTilt - displayTilt) * 0.08
-
-          model.position.x = originalX + displaySway * 100
-          model.rotation = originalRotation + displayTilt * 0.045
-          
-          // FaceReadout.blink: 0 = open, 1 = closed. Cubism reverses this range.
-          for (const param of indexedParams) {
-            const value = param.key === 'blink'
-              ? Math.max(0, Math.min(1, 1 - face.blink * 1.5))
-              : param.key === 'mouth'
-                ? Math.max(0, Math.min(1, face.mouth * 1.4))
-                : param.key === 'smile'
-                  ? Math.max(-1, Math.min(1, face.smile * 2 - 1))
-                  : param.key === 'tilt' ? (face.body?.tilt ?? 0) * 15
-                  : param.key === 'sway' ? (face.body?.sway ?? 0) * 12
-                  : (face.body?.shrug ?? 0) * 8
-            if (typeof coreModel.setParameterValueByIndex === 'function') {
-              coreModel.setParameterValueByIndex(param.index, value)
-            } else if (rawParams?.values) {
-              rawParams.values[param.index] = value
-            }
-          }
+          const input = faceReadoutRef.current
+          if (!input) return
+          // Wide eyes may exceed 1 if the model supports it; honor the actual moc3 limits.
+          drive('ParamEyeLOpen', Math.max(0, 1 - (input.leftBlink ?? input.blink) * 1.5 + (input.leftWide ?? 0) * .85), .55)
+          drive('ParamEyeROpen', Math.max(0, 1 - (input.rightBlink ?? input.blink) * 1.5 + (input.rightWide ?? 0) * .85), .55)
+          drive('ParamMouthOpenY', Math.min(1, input.mouth * 1.4), .48)
+          drive('ParamMouthForm', Math.max(-1, Math.min(1, input.smile * 2 - 1)), .32)
+          drive('ParamAngleX', (input.headX ?? 0) * 30)
+          drive('ParamAngleY', (input.headY ?? 0) * 25)
+          drive('ParamAngleZ', (input.headZ ?? 0) * 25)
+          drive('ParamEyeBallX', (input.eyeX ?? 0), .35)
+          drive('ParamEyeBallY', (input.eyeY ?? 0), .35)
+          // Crucial: separate body deformation from moving the entire avatar.
+          drive('ParamBodyAngleX', (input.body?.sway ?? 0) * 10, .20)
+          drive('ParamBodyAngleY', (input.body?.shrug ?? 0) * 7, .18)
+          drive('ParamBodyAngleZ', (input.body?.tilt ?? 0) * 10, .20)
         })
       }
 
@@ -428,8 +413,6 @@ export function useLive2D() {
         (LIVE2D_CANVAS_SIZE - mw * sc) / 2,
         (LIVE2D_CANVAS_SIZE - mh * sc) / 2,
       )
-      originalX = model.position.x
-      originalRotation = model.rotation
 
       loadedRef.current = true
       setStatus('loaded')
