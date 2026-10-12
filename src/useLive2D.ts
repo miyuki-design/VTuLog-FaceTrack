@@ -407,9 +407,19 @@ export function useLive2D() {
           }
           setBrow('ParamBrowLForm', (input.browLeft ?? 0) - (input.browFrown ?? 0) * .25)
           setBrow('ParamBrowRForm', (input.browRight ?? 0) - (input.browFrown ?? 0) * .25)
-          drive('ParamAngleX', (input.headX ?? 0) * 30)
-          drive('ParamAngleY', (input.headY ?? 0) * 25)
-          drive('ParamAngleZ', (input.headZ ?? 0) * 25)
+          // Head rotation — real model deformation, NOT whole-sprite motion.
+          // Map normalized camera Euler angles onto the moc3 actual min/max.
+          // Keep a responsive filter so head turns don't disappear under smoothing.
+          const driveAngle = (id: string, normalized: number) => {
+            const p = byId.get(id)
+            if (!p) return
+            const target = normalized >= 0 ? normalized * Math.max(0, p.max)
+              : normalized * Math.max(0, -p.min)
+            drive(id, target, .55)
+          }
+          driveAngle('ParamAngleX', input.headX ?? 0)
+          driveAngle('ParamAngleY', input.headY ?? 0)
+          driveAngle('ParamAngleZ', input.headZ ?? 0)
           drive('ParamEyeBallX', (input.eyeX ?? 0), .35)
           drive('ParamEyeBallY', (input.eyeY ?? 0), .35)
           // Crucial: separate body deformation from moving the entire avatar.

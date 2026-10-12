@@ -43,6 +43,7 @@ export async function startFaceDetection(
   let baselineBody: { height: number; slope: number; shift: number } | null = null
   let baselineHead: { x: number; y: number; z: number } | null = null
   let lastHead = { x: 0, y: 0, z: 0 }
+  let headSamples = 0
   // Pose is optional: keep the working face detector even if pose initialization fails.
   void PoseLandmarker.createFromOptions(resolver, {
     baseOptions: { modelAssetPath: POSE_MODEL, delegate: 'CPU' },
@@ -60,29 +61,55 @@ export async function startFaceDetection(
         const categories = result.faceBlendshapes?.[0]?.categories
         if (!categories) {
           baselineHead = null
+          headSamples = 0
+          lastHead = { x: 0, y: 0, z: 0 }
           lastBody = null
           baselineBody = null
           report(null)
         } else {
           const score = (name: string) => categories.find(c => c.categoryName === name)?.score ?? 0
+          // Stage 6 — yaw/pitch/roll from FaceLandmarker pose.
+          // MediaPipe returns a row-major transformation matrix. The Stage 5
+          // extraction mixed matrix axes; use conventional Euler angles here.
+          // Landmarks provide a fallback if the matrix isn't available on iOS.
           const matrix = result.facialTransformationMatrixes?.[0]?.data
-          if (matrix && matrix.length >= 16) {
-            // MediaPipe's facial transform is a row-major 4x4 matrix.
-            const raw = {
-              x: Math.atan2(matrix[8], matrix[10]) * radToDegrees,
-              y: Math.atan2(-matrix[9], Math.hypot(matrix[8], matrix[10])) * radToDegrees,
-              z: Math.atan2(matrix[4], matrix[5]) * radToDegrees,
+          const pts = result.faceLandmarks?.[0]
+          let measured: { x: number; y: number; z: number } | null = null
+          if (matrix && matrix.length >= 16 && Array.from(matrix).every(Number.isFinite)) {
+            const m = matrix
+            measured = {
+              // yaw: left/right rotation around world Y
+              x: Math.atan2(m[2], m[10]) * radToDegrees,
+              // pitch: look up/down around world X
+              y: Math.atan2(-m[6], Math.hypot(m[4], m[5])) * radToDegrees,
+              // roll: tilt head left/right around world Z
+              z: Math.atan2(m[4], m[0]) * radToDegrees,
             }
-            if (!baselineHead) baselineHead = raw
+          } else if (pts && pts.length > 263) {
+            const left = pts[33], right = pts[263], nose = pts[1]
+            const eyeCenterX = (left.x + right.x) / 2
+            const eyeCenterY = (left.y + right.y) / 2
+            const eyeWidth = Math.max(.025, Math.hypot(right.x - left.x, right.y - left.y))
+            measured = {
+              x: ((nose.x - eyeCenterX) / eyeWidth) * 60,
+              y: ((nose.y - eyeCenterY) / eyeWidth) * 60,
+              z: Math.atan2(right.y - left.y, right.x - left.x) * radToDegrees,
+            }
+          }
+          if (measured) {
+            // The first usable frame is the relaxed face center. Don't keep
+            // re-centering while the user moves: it suppresses slow head turns.
+            if (!baselineHead) baselineHead = { ...measured }
+            headSamples++
             const target = {
-              x: clamp((raw.x - baselineHead.x) / 25, -1, 1),
-              y: clamp((raw.y - baselineHead.y) / 20, -1, 1),
-              z: clamp((raw.z - baselineHead.z) / 25, -1, 1),
+              x: clamp((measured.x - baselineHead.x) / 16, -1, 1),
+              y: clamp((measured.y - baselineHead.y) / 13, -1, 1),
+              z: clamp((measured.z - baselineHead.z) / 18, -1, 1),
             }
             lastHead = {
-              x: lerp(lastHead.x, target.x, .45),
-              y: lerp(lastHead.y, target.y, .45),
-              z: lerp(lastHead.z, target.z, .45),
+              x: lerp(lastHead.x, target.x, .68),
+              y: lerp(lastHead.y, target.y, .68),
+              z: lerp(lastHead.z, target.z, .68),
             }
           }
           if (pose && now - lastPoseTime >= 100) {
