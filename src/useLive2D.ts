@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import { saveAvatarFiles, loadAvatarFiles } from './avatarStorage'
+import type { FaceReadout } from './faceTracking'
 
 export const LIVE2D_CANVAS_SIZE = 4096
 
@@ -188,6 +189,7 @@ export function useLive2D() {
   const pixiAppRef           = useRef<any>(null)
   const pixiCanvasRef        = useRef<HTMLCanvasElement | null>(null)
   const loadedRef            = useRef(false)
+  const faceReadoutRef       = useRef<FaceReadout | null>(null)
   const settingsObjectURLRef = useRef<string | null>(null)
 
   const [status,      setStatus]      = useState<Live2DStatus>('idle')
@@ -205,6 +207,7 @@ export function useLive2D() {
       settingsObjectURLRef.current = null
     }
     pixiCanvasRef.current = null
+    faceReadoutRef.current = null
     loadedRef.current = false
     setStatus('idle')
     setErrorMsg(null)
@@ -340,6 +343,45 @@ export function useLive2D() {
       const model = await (Live2DModel as any).from(fileArray, { autoInteract: false })
       app.stage.addChild(model)
 
+      // Stage 2: apply the tracked expression just before Cubism renders.
+      // Keep this passive until MediaPipe detects a face.
+      // The listener belongs to this model and is destroyed with it.
+      const internalModel = model.internalModel as any
+      const coreModel = internalModel?.coreModel as any
+      if (internalModel?.on && coreModel) {
+        // Some moc3 models omit certain parameters. Only write existing IDs.
+        const trackedIds: Record<string, 'blink' | 'mouth' | 'smile'> = {
+          ParamEyeLOpen: 'blink',
+          ParamEyeROpen: 'blink',
+          ParamMouthOpenY: 'mouth',
+          ParamMouthForm: 'smile',
+        }
+        const indexedParams: Array<{ index: number; key: 'blink' | 'mouth' | 'smile'; id: string }> = []
+        if (typeof coreModel.getParameterCount === 'function' &&
+            typeof coreModel.getParameterId === 'function' &&
+            typeof coreModel.setParameterValueByIndex === 'function') {
+          for (let index = 0; index < coreModel.getParameterCount(); index++) {
+            const rawId = coreModel.getParameterId(index)
+            const id = typeof rawId?.getString === 'function' ? rawId.getString() : String(rawId)
+            const key = trackedIds[id]
+            if (key) indexedParams.push({ index, key, id })
+          }
+        }
+        internalModel.on('beforeModelUpdate', () => {
+          const face = faceReadoutRef.current
+          if (!face) return
+          // FaceReadout.blink: 0 = open, 1 = closed. Cubism reverses this range.
+          for (const param of indexedParams) {
+            const value = param.key === 'blink'
+              ? Math.max(0, Math.min(1, 1 - face.blink * 1.5))
+              : param.key === 'mouth'
+                ? Math.max(0, Math.min(1, face.mouth * 1.4))
+                : Math.max(-1, Math.min(1, face.smile * 2 - 1))
+            coreModel.setParameterValueByIndex(param.index, value)
+          }
+        })
+      }
+
       await new Promise<void>(r => requestAnimationFrame(() => r()))
 
       const mw = model.width  || LIVE2D_CANVAS_SIZE
@@ -407,5 +449,6 @@ useEffect(() => {
 
 useEffect(() => () => cleanup(), [cleanup])
 
-return { loadModel, cleanup, pixiCanvasRef, loadedRef, status, errorMsg, modelName, diagnostics }
+const updateFace = useCallback((values: FaceReadout | null) => { faceReadoutRef.current = values }, [])
+return { loadModel, cleanup, updateFace, pixiCanvasRef, loadedRef, status, errorMsg, modelName, diagnostics }
 }

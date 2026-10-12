@@ -277,6 +277,8 @@ export default function App() {
   const live2d = useLive2D()
   const useLive2DRef = useRef(false)
   const live2dFolderInputRef = useRef<HTMLInputElement>(null)
+  const live2dUpdateRef = useRef(live2d.updateFace)
+  useEffect(() => { live2dUpdateRef.current = live2d.updateFace }, [live2d.updateFace])
 
   // Stage 1: detect expressions with the front camera without modifying Live2D.
   // Switching camera types reloads the app so iOS releases its previous stream.
@@ -298,11 +300,12 @@ export default function App() {
       values => {
         if (inactive) return
         setFaceValues(values)
+        live2dUpdateRef.current(values)
         setFaceStatus(values ? '顔を認識中 ✓' : '顔を探しています…')
       },
     ).then(dispose => { if (inactive) dispose(); else stop = dispose })
      .catch(error => { if (!inactive) setFaceStatus('開始失敗: ' + String(error)) })
-    return () => { inactive = true; stop?.() }
+    return () => { inactive = true; stop?.(); live2dUpdateRef.current(null) }
   }, [faceMode, cameraReady])
 
   // ── UI ──
