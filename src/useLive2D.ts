@@ -357,16 +357,22 @@ export function useLive2D() {
           ParamMouthForm: 'smile',
         }
         const indexedParams: Array<{ index: number; key: 'blink' | 'mouth' | 'smile'; id: string }> = []
-        if (typeof coreModel.getParameterCount === 'function' &&
-            typeof coreModel.getParameterId === 'function' &&
-            typeof coreModel.setParameterValueByIndex === 'function') {
-          for (let index = 0; index < coreModel.getParameterCount(); index++) {
-            const rawId = coreModel.getParameterId(index)
-            const id = typeof rawId?.getString === 'function' ? rawId.getString() : String(rawId)
-            const key = trackedIds[id]
-            if (key) indexedParams.push({ index, key, id })
-          }
+        // Cubism Framework exposes getParameterCount/setParameterValueByIndex,
+        // but its parameter IDs live in the underlying Cubism Core model.
+        // It does NOT expose getParameterId() on every version.
+        const rawParams = coreModel._model?.parameters
+        const count = typeof coreModel.getParameterCount === 'function'
+          ? coreModel.getParameterCount()
+          : (rawParams?.count ?? 0)
+        for (let index = 0; index < count; index++) {
+          const rawId = rawParams?.ids?.[index] ??
+            (typeof coreModel.getParameterId === 'function' ? coreModel.getParameterId(index) : null)
+          if (rawId == null) continue
+          const id = typeof rawId?.getString === 'function' ? rawId.getString() : String(rawId)
+          const key = trackedIds[id]
+          if (key) indexedParams.push({ index, key, id })
         }
+        console.info('[FaceTrack] matched Live2D parameters:', indexedParams.map(p => p.id))
         internalModel.on('beforeModelUpdate', () => {
           const face = faceReadoutRef.current
           if (!face) return
@@ -377,7 +383,11 @@ export function useLive2D() {
               : param.key === 'mouth'
                 ? Math.max(0, Math.min(1, face.mouth * 1.4))
                 : Math.max(-1, Math.min(1, face.smile * 2 - 1))
-            coreModel.setParameterValueByIndex(param.index, value)
+            if (typeof coreModel.setParameterValueByIndex === 'function') {
+              coreModel.setParameterValueByIndex(param.index, value)
+            } else if (rawParams?.values) {
+              rawParams.values[param.index] = value
+            }
           }
         })
       }
